@@ -3,6 +3,14 @@ setType(org::bukkit::Material::match_material("BURNING_FURNACE"))
 =end
 
 
+
+
+
+# /# quantum fetch
+# /# quantum download
+# /# quantum upload
+
+
 class Folder < Hash
   def [](x)
     value = super
@@ -13,18 +21,41 @@ class Folder < Hash
     end
   end
 end
+
+
 class HardDrive
   attr_accessor :volume
   attr_accessor :cd
   
   def initialize
-    # cd || a stack of current folders
-    @cd = [{}]
+    # files => the files that are stored
+    # cd    => an array of folder names
+    @cd = []
+    @files = {}
   end
   
   def current_folder
-    @cd.last.inject({}){|memo,(k,v)| memo[k.to_sym] = v; memo}
-    return @cd.last
+    stored_hash = @files
+    @cd.each do |s|
+      stored_hash = stored_hash[s]
+    end
+    return stored_hash
+  end
+  
+  def cd(sym)
+    if a_folder? sym
+      @cd << sym
+      return "{green} Entered Folder: #{sym}"
+    elsif sym.to_s.include? '~'
+      @cd = []
+      return "{green} Entered Root Folder"
+    else
+      return "{red} Cannot Locate Folder"
+    end
+  end
+  
+  def a_folder? sym
+    return has_file?(sym) && current_folder[sym].is_a?(Hash)
   end
   
   def save(name,file)
@@ -40,6 +71,10 @@ class HardDrive
   
   def has_file?(name)
     return current_folder[name]
+  end
+  
+  def installed?(app)
+    return has_file?(app) || @files[app]
   end
   
   def delete(*names)
@@ -69,7 +104,11 @@ class VpsFile
   end
 end
 
-
+#============================================================================
+# ※ VPS Exe
+#----------------------------------------------------------------------------
+# The Executable for VPS
+#============================================================================
 class VpsExe < VpsFile
   attr_accessor
   def run
@@ -81,6 +120,12 @@ class VpsBook < VpsFile
   attr_accessor :author, :title, :pages
   def initialize
     yield self if block_given?
+  end
+  
+  def init_by_meta(meta)
+    self.author = meta.getAuthor()
+    self.title  = meta.getTitle() 
+    self.pages  = meta.getPages()
   end
 end
 
@@ -232,7 +277,7 @@ Welcome Using {green}SonijiOS V0.3{white} Server Edition!
   
   def play_quantum_effect
     #add(double x, double y, double z
-    locations = [$ssh_sender.getLocation,$ssh_sender.getLocation.add(1,1,1),$ssh_sender.getLocation.add(1,1,1)].each do |l|
+    [$ssh_sender.getLocation,$ssh_sender.getLocation.add(1,1,1),$ssh_sender.getLocation.add(1,1,1)].each do |l|
       $ssh_sender.playEffect(l,org::bukkit::Effect::ENDER_SIGNAL, 0)
     end
   end
@@ -272,9 +317,7 @@ Welcome Using {green}SonijiOS V0.3{white} Server Edition!
         meta = hand_item.getItemMeta()
         return "{red} Read Requires A Written Book" unless meta.respond_to? :getPages
         stored_book = VpsBook.new do |b|
-          b.author = meta.getAuthor()
-          b.title  = meta.getTitle() 
-          b.pages  = meta.getPages()
+          b.init_by_meta meta
         end
         filename = "#{meta.getTitle()}.book"
         save_file(filename,stored_book)
@@ -385,21 +428,8 @@ Welcome Using {green}SonijiOS V0.3{white} Server Edition!
   
   def command_cd(*args)
     name = args[0]
-    if name.length == 1 && name.include?("~")
-      @hd.cd = @hd_cd.first
-      return "Directory Changed"
-    else
-      if @hd.current_folder[name].is_a?( Hash)
-        @hd.cd.push @hd.current_folder[name]
-        return "Directory Changed"
-      else
-        return "Cannot Find Directory"
-      end
-      
-    end
-    
+    @hd.cd name
   end
-  
 end
 
 
@@ -586,39 +616,7 @@ class VpsPlugin
       end
     end
 
-    public_player_command('$','Bash Command', '/$') do |me,method_name,*args|
-      server = @vps.select do |v|
-        @current_ssh[me.name].ip.include? v.ip
-      end
-      server = server[0]
-      if server &&! server.destroyed
-        unless server.running?
-          me.msg colorize("{red} Sorry but we cannot connect to the server")
-        else
-          if server.password != @current_ssh[me.name].password &&! server.password == 0
-            me.msg colorize("{red} SSH Password Error!") 
-          else
-            if method_name
-              sending_method = ('command_' + method_name).to_sym
-              if server.respond_to?(sending_method)
-                $ssh_sender = me
-                me.msg colorize(server.send(sending_method,*args))
-              else
-                me.msg "Unknown Bash Method #{method_name}"
-              end
-
-            else
-              me.msg colorize(server.interacted_by me, @current_ssh[me.name].password)
-            end
-          end
-          
-        end
-        
-      else
-        me.msg red('Please Indicate A Remote Server, see /ssh')
-        me.msg red('There is a possibility that the server has been destroyed')
-      end 
-    end
+    init_all_bash_commands
 
     public_player_command('clear_vps','Clear All Vpses','/clear_vps') do |me|
       @vps = []
@@ -627,7 +625,6 @@ class VpsPlugin
 
 
     public_player_command('xrp', 'Check Your XRP', '/xrp') do |me|
-
       xrp = @xrp[me.name]
       xrp = 0 unless xrp
       me.msg green("You have #{xrp} XRP Points")
@@ -664,6 +661,42 @@ class VpsPlugin
     return path
   end
 
+
+  def init_all_bash_commands
+    public_player_command('$','Bash Command', '/$') do |me,method_name,*args|
+      server = @vps.select do |v|
+        @current_ssh[me.name].ip.include? v.ip
+      end
+      server = server[0]
+      if server &&! server.destroyed
+        unless server.running?
+          me.msg colorize("{red} Sorry but we cannot connect to the server")
+        else
+          if server.password != @current_ssh[me.name].password &&! server.password == 0
+            me.msg colorize("{red} SSH Password Error!") 
+          else
+            if method_name
+              sending_method = ('command_' + method_name).to_sym
+              if server.respond_to?(sending_method)
+                $ssh_sender = me
+                me.msg colorize(server.send(sending_method,*args))
+              else
+                me.msg "Unknown Bash Method #{method_name}"
+              end
+
+            else
+              me.msg colorize(server.interacted_by me, @current_ssh[me.name].password)
+            end
+          end
+          
+        end
+        
+      else
+        me.msg red('Please Indicate A Remote Server, see /ssh')
+        me.msg red('There is a possibility that the server has been destroyed')
+      end 
+    end
+  end
 
   def get_world(vps)
     return server.getWorld(vps.pos.world)
